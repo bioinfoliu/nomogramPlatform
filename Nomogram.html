@@ -1,0 +1,808 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ko">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=0" />
+<title>SNUH MCN Nomogram Platform</title>
+
+<link href="css/swiper.css" rel="stylesheet" type="text/css" />
+<link href="css/style.css" rel="stylesheet" type="text/css" />
+<link href="css/animate.css" rel="stylesheet" type="text/css" />
+<link href="css/default.css" rel="stylesheet" type="text/css" />
+
+<script src="d3.v3.js" charset="utf-8"></script>
+<script src="d3.scale.logit.js" charset="utf-8"></script>
+<script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+<script type="text/javascript" src="js/layout.js"></script>
+<script type="text/javascript" src="js/swiper.js"></script>
+<script type="text/javascript"></script>
+
+
+
+<script>
+    function wrap(text, width) {
+      var T = text[0];
+      var aBCRrect = T.map(function(v) { return v.getBoundingClientRect(); });
+      var rects = aBCRrect.filter(function(v) { return v.width > 0; });
+      var ridxs = T.map(function(v,i) { return i; }).filter(function(i) { return aBCRrect[i].width > 0; });
+      if (rects[1].left > rects[0].left) for (var i=1 ; i<rects.length ; i++) {
+          if (rects[i].left < rects[i-1].right) {
+              var c1 = rects[i-1].left + rects[i-1].width/2;
+              var c2 = rects[i].left + rects[i].width/2;
+              T[ridxs[i]].setAttribute("x", T[ridxs[i]].getAttribute("x") + rects[i].width/2);
+              T[ridxs[i-1]].setAttribute("x", T[ridxs[i-1]].getAttribute("x") - rects[i-1].width/2);
+          }
+      } else for (var i=rects.length-2 ; i>=0 ; i--) {
+          if (rects[i+1].right > rects[i].left) {
+              var c1 = rects[i].left + rects[i].width/2;
+              var c2 = rects[i+1].left + rects[i+1].width/2;
+              T[ridxs[i+1]].setAttribute("x", T[ridxs[i+1]].getAttribute("x") - rects[i+1].width/2);
+              T[ridxs[i]].setAttribute("x", T[ridxs[i]].getAttribute("x") + rects[i].width/2);
+          }
+      }
+    }
+    var dbg = false;
+    function d3nomogram(id, obs, axes, pred, width, height, margin, anim, duration) {
+        //Width and height
+        if (typeof width == "undefined")  width = 900;
+        if (typeof height == "undefined")  height = 500;
+        if (typeof dur == "undefined")  dur = 300;
+        if (typeof margin == "undefined")  margin = [20, 30, 30, 40];
+        if (typeof anim == "undefined")  anim = true;
+        
+        var colors = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf", "red", "blue",
+        ];
+        var bUsePointNorm = true;
+        var textMax = 0;
+        var pointMin = 999999;
+        var pointMax = -999999;
+        var totalMin = bUsePointNorm ? 0 : axes[0];
+        var totalMax = bUsePointNorm ? 0 : axes[0];
+        var rawTotalMin = axes[0];
+        var rawTotalMax = axes[0];
+        var totalPoint = axes[0];
+        var points = [ axes[0] ];
+        var nFixedAxisT = 1;
+        var nFixedAxisB = 2;
+        var nFixedAxis = nFixedAxisT + nFixedAxisB;
+        var nObs = obs.length;
+    
+        // Height of each axis
+        var axisHeight = (height-margin[0]-margin[2]) / (nObs+nFixedAxis);
+                
+        for (var i in axes) {
+            if (i == "0") continue;
+            if (typeof axes[i][3] == 'object') {
+                for (var j in axes[i][3]) if (axes[i][3].hasOwnProperty(j)) {
+                    pointMax = Math.max(pointMax, axes[i][3][j]);
+                    pointMin = Math.min(pointMin, axes[i][3][j]);
+                }
+            } else {
+                pointMax = Math.max(pointMax, axes[i][4]);
+                pointMin = Math.min(pointMin, axes[i][3]);
+            }
+        }
+        console.log("Point range ", pointMin, " ~ ", pointMax);
+        d3.select(id).html("");
+        
+        // Generate SVG
+        this.svg = d3.select(id).append("svg")
+            .attr("width", width)
+            .attr("height", height);
+            
+        // Generate main group
+        this.dataGroup = this.svg.append("svg:g");
+        
+        //
+        // Top-side fixed axis label
+        //
+     
+        // Point
+        this.hTextPoint = this.dataGroup.append("svg:text")
+            .text("Point")
+            .attr("class", "hmRowText");
+     
+        //
+        // Variable axes label
+        //
+        this.hTextVar = this.dataGroup.selectAll("#axes").data(axes).enter().append("svg:text")
+            .text(function(d,i) { return d[0]; })
+            .attr("class", "hmRowText")
+            .attr("opacity", 0)
+            .attr("fill", function(d,i) { return dbg?'black':colors[i]; })
+            .each(function(d) {
+                textMax = Math.max(textMax,this.getBBox().width);
+            });
+        if (anim == true)
+            this.hTextVar.transition()
+                .delay(function(d,i) { return dur * i; })
+                .duration(dur)
+                .attr("opacity", 1);
+        else
+            this.hTextVar.attr("opacity", 1);
+        
+        //
+        // Bottom-side fixed axis label
+        //
+     
+        // Total point
+        var B_showTotalPoint = true;
+        if (B_showTotalPoint) this.hTextTotalPt = this.dataGroup.append("svg:text")
+            .text("Total Point")
+            .attr("class", "hmRowText hmBoldText");
+    
+        // Predictor
+        this.hTextPred = this.dataGroup.append("svg:text")
+            .text("Probability of MCN Advanced Neoplasia")
+            .attr("class", "hmRowText hmBoldText");
+        
+        // Get the maximum width of axis hTextVars
+        if (B_showTotalPoint)
+            textMax = Math.max(
+                this.hTextPred.node().getBBox().width, Math.max(
+                    this.hTextTotalPt.node().getBBox().width,
+                    Math.max(
+                        this.hTextPoint.node().getBBox().width, textMax
+                    ))) + margin[3];
+        else
+            textMax = Math.max(
+                this.hTextPred.node().getBBox().width,
+                    Math.max(
+                        this.hTextPoint.node().getBBox().width, textMax
+                    )) + margin[3];
+                
+        // Move to right all of the axis hTextVars
+        this.hTextPoint
+            .attr("transform", function(d,i){
+                return "translate(0,"+(axisHeight*0.5)+")";
+            });
+        this.hTextVar
+            .attr("transform", function(d,i){
+                return "translate(0,"+axisHeight*(i+0.5)+")";
+            });
+        if (B_showTotalPoint)
+            this.hTextTotalPt
+                .attr("transform", function(d,i){
+                    return "translate(0,"+axisHeight*(nObs+1.5)+")";
+                });
+        this.hTextPred
+            .attr("transform", function(d,i){
+                return "translate(0,"+axisHeight*(nObs+2.5)+")";
+            });
+     
+        // Generate axes group
+        this.axesGroup = this.svg.append("svg:g");
+        
+        // Create scale function for point mapping
+        var fScalePoint = null;
+        var fScalePointNorm = null;
+        if (bUsePointNorm) {
+            fScalePoint = d3.scale.linear()
+                .domain( [pointMin, pointMax] )
+                .range( [0, 100] );
+            fScalePointNorm = d3.scale.linear()
+                .domain( [0, 100] )
+                .range( [textMax, width-margin[1]] );
+        } else
+            fScalePoint = d3.scale.linear()
+                .domain( [pointMin, pointMax] )
+                .range( [textMax, width-margin[1]] );
+        
+        //
+        // Top-side fixed axis
+        //
+        this.axesGroup.append("svg:g")
+            .attr("stroke", "#222")
+            .attr("class", "axis")
+            .call(
+                d3.svg.axis()
+                    .scale(fScalePointNorm ? fScalePointNorm : fScalePoint)
+                    .orient("bottom")
+            )
+            .attr("transform", "translate(0,"+(axisHeight*0.5)+")");
+        
+        //
+        // Variable axes
+        //
+        for (var i=1 ; i<axes.length ; i++) {
+            var aAx             = axes[i];
+            var fScaleAxis      = null;
+            var fScaleCalcPt    = null;
+            var obsi = parseFloat(obs[i-1]);
+            var val             = typeof aAx[5] == 'function' ?
+                Math.round(aAx[5](obsi)*1000)/1000 : obs[i-1];
+    
+            if (aAx[2] == null && aAx[1].length) {
+                var tm = [], tm2 = [];
+                var adj = false;
+    /* if (fScalePointNorm && fScalePointNorm(fScalePoint(aAx[3][aAx[1][0]])) != textMax) {
+                    tm.push(fScalePointNorm(0));
+                    tm2.push(pointMin);
+                    adj = true;
+                }*/
+                for (var j=0 ; j<aAx[1].length ; j++) {
+                    tm.push(fScalePointNorm ? fScalePointNorm(fScalePoint(aAx[3][aAx[1][j]])) : fScalePoint(aAx[3][aAx[1][j]]));
+                    tm2.push(aAx[3][aAx[1][j]]);
+                }               
+                // Ordinal scale
+                fScaleAxis = d3.scale.ordinal()
+                    .domain( adj ? [ "" ].concat(aAx[1]) : aAx[1] )
+                    .range(tm);
+                fScaleCalcPt = d3.scale.ordinal()
+                    .domain( adj ? [ "" ].concat(aAx[1]) : aAx[1] )
+                    .range(tm2);
+            } else {
+                fScaleAxis = d3.scale.linear()
+                    .domain( [0, aAx[2]] )
+                    .range(
+                        fScalePointNorm ?
+                            [fScalePointNorm(fScalePoint(aAx[3])), fScalePointNorm(fScalePoint(aAx[4]))] :
+                            [fScalePoint(aAx[3]), fScalePoint(aAx[4])]
+                    );
+                
+                fScaleCalcPt = d3.scale.linear()
+                    .domain( [aAx[1], aAx[2]] )
+                    .range( [aAx[3], aAx[4]] );
+            }
+            var posY    = axisHeight*(i+0.5);
+            var posObs  = fScaleAxis(val);
+            if (typeof posObs == "undefined")
+                posObs  = fScaleAxis( fScaleAxis.domain()[val] );
+            
+            var nTick = (fScaleAxis.range()[1]-fScaleAxis.range()[0])/40;
+            if (nTick < 2) nTick = 2;
+            
+            // Drawing observation on point axis
+            if (!dbg) this.axesGroup.append("svg:circle")
+                .attr("r", 2)
+                .attr("transform", "translate("+posObs+","+(axisHeight*0.5)+")");
+     
+            // Add axis
+            var hAxis = this.axesGroup.append("svg:g")
+                .attr("transform", function(d) {
+                    return "translate(0,"+posY+")";
+                })
+                .attr("class", "axis")
+                .attr("stroke", dbg?'black':colors[i])
+                .attr("opacity", 0)
+                .call(
+                    d3.svg.axis()
+                        .scale(fScaleAxis)
+                        .orient("bottom")
+                        .ticks(nTick)
+                );
+            wrap(hAxis.selectAll(".tick text"));
+                       
+            // Drawing observation on axis
+            var hCircle = null;
+            if (!dbg) hCircle = this.axesGroup.append("svg:circle")
+                .attr("r", 3)
+                .attr("opacity", 0)
+                .attr("transform", "translate("+posObs+","+posY+")");
+            
+            // Connect two circles
+            var hLineConnect = null;
+            if (!dbg) hLineConnect = this.axesGroup.append("svg:line")
+                .attr("x1", posObs)
+                .attr("x2", posObs)
+                .attr("y1", axisHeight*0.5)
+                .attr("y2", posY)
+                .attr("opacity", 0)
+                .attr("style", "stroke:rgb(255,0,0);stroke-width:0.5")
+                .style("stroke-dasharray", ("5, 5"));
+            
+
+
+                var x_start_pixel = fScalePointNorm(fScalePoint(0));
+                if (isNaN(x_start_pixel)) {
+                    x_start_pixel = textMax; // 安全回退
+                }
+
+                // 2. 创建 hLineValue, 无论变量是 Yes/No 还是连续型
+                var hLineValue = null;
+                if (!dbg) {
+                    hLineValue = this.axesGroup.append("svg:line")
+                        .attr("x1", x_start_pixel) // 始终使用 0 点作为起始
+                        .attr("x2", x_start_pixel) // 起始长度为 0
+                        .attr("y1", posY)
+                        .attr("y2", posY)
+                        .attr("style", "stroke:"+colors[i]+";stroke-width:5");
+                }
+
+            // Animation
+            if (anim == true) {
+                hAxis.transition().delay(dur * i)
+                    .duration(dur)
+                    .attr("opacity", 1);
+     
+                if (!dbg) hCircle.transition().delay(dur * i)
+                    .duration(dur)
+                    .attr("opacity", 1);
+            
+                if (!dbg) hLineConnect.transition().delay(dur * i)
+                    .duration(dur)
+                    .attr("opacity", 1);
+     
+                if (!dbg) hLineValue.transition().delay(dur * i)
+                    .duration(dur)
+                    .attr("x2", posObs);
+            } else {
+                hAxis.attr("opacity", 1);
+                if (!dbg) hCircle.attr("opacity", 1);
+                if (!dbg) hLineConnect.attr("opacity", 1);
+                if (!dbg && hLineValue) hLineValue.attr("x2", posObs);
+            }
+            
+
+            if (aAx[2] != null && !dbg) {
+                var obsText = this.axesGroup.append("svg:text")
+                    .text(function(d) {return val;})
+                    .attr("class", "obsText")
+                    .attr("fill", function(d) {return colors[i];})
+                    .attr("transform", "translate("+(posObs+3)+","+(posY-3)+")");
+            }
+     
+            points[i]   = fScaleCalcPt(val);
+            if (typeof points[i] == "undefined")
+                points[i] = fScaleCalcPt(fScaleAxis.domain()[val]);
+            else if (points[i] != points[i])
+                points[i] = 0;
+            if (typeof aAx[3] == 'object') {
+                var tMin = 99999999;
+                var tMax = -99999999;
+                for (var j in aAx[3]) if (aAx[3].hasOwnProperty(j)) {
+                    var v = aAx[3][j];
+                    if (tMin > v) tMin = v;
+                    if (tMax < v) tMax = v;
+                }
+                totalMin    += bUsePointNorm ? fScalePoint(tMin) : tMin;
+                totalMax    += bUsePointNorm ? fScalePoint(tMax) : tMax;
+                rawTotalMin += tMin;
+                rawTotalMax += tMax;
+                if (bUsePointNorm)
+                    console.log(aAx[0] + " point range " + fScalePoint(tMin) + " ~ " + fScalePoint(tMax));
+                else
+                    console.log(aAx[0] + " point range " + tMin + " ~ " + tMax);
+            } else {
+                totalMin    += bUsePointNorm ? fScalePoint(aAx[3]) : aAx[3];
+                totalMax    += bUsePointNorm ? fScalePoint(aAx[4]) : aAx[4];
+                rawTotalMin += aAx[3];
+                rawTotalMax += aAx[4];
+            }
+            totalPoint  += points[i];
+        }
+        var fScaleTotal = d3.scale.linear()
+            .domain([bUsePointNorm ? 0 : totalMin, totalMax])
+            .range([textMax, width-margin[1]]);
+        
+        //
+        // Bottom-side fixed axis
+        //
+    
+        // Add total point axis
+        if (B_showTotalPoint) this.axesGroup.append("svg:g")
+            .attr("transform", function(d) {
+                return "translate(0,"+axisHeight*(nObs+1.5)+")";
+            })
+            .attr("class", "axis")
+            .attr("stroke", "#222")
+            .call(
+                d3.svg.axis()
+                    .scale(fScaleTotal)
+                    .orient("bottom")
+            );
+        
+        // Add prediction axis
+        var dd = [13.38,  30, 40, 60, 80, 90,95, 98.85];
+        var rr = [0, 90, 120, 186, 260, 332, 390,510];
+        for (var i=0 ; i<rr.length ; i++) rr[i] += textMax;
+        console.log("Total point max " + totalPoint);
+        var fScalePred = d3.scale.ordinal()
+            .domain(dd)
+            .range(rr);
+
+
+        this.axesGroup.append("svg:g")
+            .attr("transform", function(d) {
+                return "translate(0,"+axisHeight*(nObs+2.5)+")";
+            })
+            .attr("class", "axis")
+            .attr("stroke", "#222")
+            .call(
+                d3.svg.axis()
+                    .scale(fScalePred)
+                    .orient("bottom")
+            );
+    
+        var calcTotalScale = d3.scale.linear()
+            .domain([bUsePointNorm ? 0 : totalMin, totalMax])
+            .range([textMax, fScaleTotal(totalMax)]);
+            
+        var lw = 0;
+        if (B_showTotalPoint) for (var i=1 ; i<points.length ; i++) {
+            if (dbg) continue;
+            var curLine = this.axesGroup.append("svg:line")
+                .attr("x1", function(d) {
+                    var width = calcTotalScale(bUsePointNorm ? 0 : points[1]);
+                  
+                    for (var j=1 ; j<i ; j++) {
+                        width += calcTotalScale(fScalePoint(points[j]))-(textMax);
+                    }
+                    return width;
+                })
+                .attr("x2", function(d) {
+                    var width = calcTotalScale(bUsePointNorm ? 0 : points[1]);
+                  
+                    for (var j=1 ; j<i ; j++) {
+                        width += calcTotalScale(fScalePoint(points[j]))-(textMax);
+                    }
+                    return width;
+                })
+                .attr("y1", axisHeight*(nObs+1.5))
+                .attr("y2", axisHeight*(nObs+1.5))
+                .attr("style", "stroke:"+colors[i]+";stroke-width:5");
+            if (anim == true)
+                curLine.transition().delay(dur * i)
+                    .duration(dur)
+                    .attr("x2", function(d) {
+                        var width = calcTotalScale(bUsePointNorm ? 0 : points[1]);
+                      
+                        for (var j=1 ; j<=i ; j++) {
+                            width += calcTotalScale(fScalePoint(points[j]))-(textMax);
+                        }
+                        lw = width;
+                        return width;
+                    });
+            else curLine.attr("x2", function(d) {
+                    var width = calcTotalScale(bUsePointNorm ? 0 : points[1]);
+                  
+                    for (var j=1 ; j<=i ; j++) {
+                        width += calcTotalScale(fScalePoint(points[j]))-(textMax);
+                    }
+                    lw = width;
+                    return width;
+                });
+        }
+    
+        // Add prediction bar
+        if (!dbg) {
+            this.axesGroup.append("svg:circle")
+                .attr("transform", "translate("+lw/*fScalePred(pred)*/+","+axisHeight*(nObs+2.5)+")")
+                .attr("r", 3);
+            this.axesGroup.append("svg:line")
+                .attr("x1", textMax)
+                .attr("x2", lw)//fScalePred(pred))
+                .attr("y1", axisHeight*(nObs+2.5))
+                .attr("y2", axisHeight*(nObs+2.5))
+                .attr("style", "stroke:red;stroke-width:5;");
+        }
+    }
+    
+    function prob(n, acc, conv) {
+        var pred = n[0];
+        for (var i=1 ; i<n.length ; i++) {
+          var a = acc[i-1];
+          var val = $(a).val();
+          if (!val.length) return a+" is empty!";
+          if (typeof eval("conv[\""+a+"\"]") != 'undefined') {
+            val = Number(val);
+            eval("val = conv[\""+a+"\"](Number(val))");
+          }
+          if (n[i][4] === undefined) {
+                var key = (val === "1") ? "Yes" : "No";                 
+                pred += n[i][3][key];
+            }
+          else
+            pred += val * n[i][1];
+        }
+    //  console.log("Prob " + pred);
+        return 1/(1+Math.exp(-pred));
+    }
+
+
+
+function calc() {
+
+    var invav = [
+        "input[name=age]:checked",
+        "input[name=size]:checked",
+        "input[name=cea]:checked",
+        "input[name=ca199]:checked",
+        "input[name=mnp]:checked"
+    ];
+
+    var invax = [
+        -1.8679, // Intercept
+        [ "Age ≥ 45 years", ["Yes", "No"], null, {"Yes": 0.9409, "No": 0} ],
+        [ "Cyst size ≥ 65 mm", ["Yes", "No"], null, {"Yes": 1.3450, "No": 0} ],
+        [ "CEA ≥ 5 ng/mL", ["Yes", "No"], null, {"Yes": 1.7688, "No": 0} ],
+        [ "CA19-9 ≥ 37 U/mL", ["Yes", "No"], null, {"Yes": 0.6860, "No": 0} ],
+        [ "Mural Nodule Present", ["Yes", "No"], null, {"Yes": 1.5767, "No": 0} ]
+    ];
+     
+    
+    var invaprob = prob(invax, invav, {});
+    
+    if (invaprob !== Number(invaprob)) {
+        $("#invaprob").val(""); // 清空结果
+        $("#comment").text(invaprob); // 显示错误信息
+    } else {
+        $("#invaprob").val(Math.round(invaprob * 10000) / 100);
+        $("#comment").text(""); // 清除错误信息
+    }
+
+
+    
+    // 修复：创建 obs 数组时使用 "Yes" / "No" 标签
+    var obs = [];
+    for (var i = 0; i < invav.length; i++) {
+        var val = $(invav[i]).val();
+        var label = (val === "1") ? "Yes" : "No";
+        obs.push(label);
+    }
+
+    d3nomogram("#invanomo", obs, invax, Math.log(invaprob / (1 - invaprob)), 800);
+}
+
+    $(function() {
+        // 修复：注释掉这一行，因为它依赖未引入的 jQuery UI 库
+        // $("button").button();
+    });
+
+function downvis(id, fmt) {
+    var svgelem = $('#' + id + " > svg");
+    if (svgelem.length == 0) {
+        alert("错误：找不到SVG元素。");
+        return;
+    }
+
+    var svgNode = svgelem[0];
+    var w = svgelem.width();
+    var h = svgelem.height();
+    var serializer = new XMLSerializer();
+    
+    // 克隆节点以避免修改原始图像
+    var svgClone = svgNode.cloneNode(true);
+    
+    // 提取页面中的 CSS 样式
+    var styles = "";
+    try {
+        styles = $('style[type="text/css"]').text();
+    } catch (e) {
+        console.warn("无法提取CSS样式", e);
+    }
+    
+    // 创建 <style> 元素并注入 <defs>
+    var defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    var styleElem = document.createElementNS("http://www.w3.org/2000/svg", "style");
+    styleElem.setAttribute("type", "text/css");
+    styleElem.textContent = styles;
+    defs.appendChild(styleElem);
+    svgClone.insertBefore(defs, svgClone.firstChild);
+
+    // 设置SVG的xmlns属性（对于独立文件至关重要）
+    svgClone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+    // 序列化包含内联样式的SVG
+    var svgString = serializer.serializeToString(svgClone);
+
+    // 创建 Blob 和 URL
+    var blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+
+    // 创建临时下载链接
+    var a = document.createElement('a');
+    a.style.display = 'none';
+    document.body.appendChild(a);
+
+    if (fmt === 'svg') {
+        a.href = url;
+        a.download = 'nomogram.svg';
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } else if (fmt === 'png') {
+        // 使用 Canvas 转换为 PNG
+        var img = new Image();
+        img.onload = function() {
+            var canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            var ctx = canvas.getContext('2d');
+            
+            // 绘制白色背景（因为PNG支持透明度）
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, w, h);
+            
+            // 绘制 SVG 图像
+            ctx.drawImage(img, 0, 0);
+            
+            // 获取 PNG data URL
+            var pngUrl = canvas.toDataURL('image/png');
+            
+            // 触发下载
+            a.href = pngUrl;
+            a.download = 'nomogram.png';
+            a.click();
+            
+            // 清理
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url); // 撤销 blob URL
+        };
+        img.onerror = function(e) {
+            console.error("Image load error", e);
+            alert('无法将SVG转换为PNG。');
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+        img.src = url; // 将 blob URL 设为图像源
+
+    } else if (fmt === 'tif') {
+        alert('TIFF 格式下载不支持浏览器端生成，需要服务器支持。请选择 PNG 或 SVG。');
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+}
+</script>
+
+
+<style type="text/css">
+/* ... 你的 CSS 样式 ... */
+.ZX {
+font-weight:bold;
+text-anchor:end;
+font-size:11pt;
+}
+
+.axis text {
+  font: 11px sans-serif;
+  stroke-width: 0;
+}
+.axisValue {
+    stroke-width:3;
+}
+
+.axis line,
+.axis path {
+  fill: none;
+  shape-rendering: crispEdges;
+}
+
+.ZU { font-weight:bold; padding-left:20px; }
+.main {   max-width: 960px;      /* 最大宽度 960px */
+  margin: 0 auto;        /* 居中 */
+  padding: 1rem;         /* 四周留空 */
+  box-sizing: border-box; /* 防止 padding 撑开宽度 */}
+.res1 {   width: 100%;           /* 先全宽显示 */
+  float: none;           /* 移除左右浮动 */
+  margin-bottom: 1rem;   /* 间距 */}
+.res2 { width:480px; float:right; }
+.res3 { width:980px; float:left; }
+
+.ZY { text-align:center; font-size:90%; clear:both; }
+legend { font-size:120%; font-weight:bold; }
+#gnb li.sep {
+    color: #aa988a;
+    font-size: 20px;
+    font-weight: 500;
+    background: transparent;
+    margin: 20px 0 10px;
+}
+.button { position: absolute; top: 100%; right: 0; width: 153px; line-height: 45px; font-size: 16px; color: #fff; text-align: center; background: #ef9952; border-radius: 0 0 10px 10px; }
+</style>
+</head>
+<body>
+<div id="wrap"> 
+    <div id="header">
+        </div>
+    <div id="container">
+        <h2 class="s10"> MCN Advanced Neoplasia Nomogram </h2>
+        <div class="st_guide"> Nomogram-based Risk Prediction of MCN Advanced Neoplasia</div>
+        <div id="contents">
+            
+            <div id="tab_con_c01" class="s01_01"> 
+
+                <div class="clinical_prediction"> 
+                    <div class="data" id="positive_model_data">
+                        <div class='main'>
+                            <fieldset>
+                                <legend> Patient Information </legend>
+<table>
+                                <tr height='10'></tr> <tr>
+                                        <td class='ZU'>Age ≥ 45 years</td>
+                                        <td>
+                                            <input type="radio" id="age_yes" name="age" value="1"> 
+                                            <label for="age_yes" style="cursor: pointer;">Yes</label>
+                                            
+                                            <input type="radio" id="age_no" name="age" value="0" checked > 
+                                            <label for="age_no" style="cursor: pointer;">No</label>
+                                            </td>
+                                    </tr>
+
+                                    <tr>
+                                        <td class='ZU'>Cyst size ≥ 65 mm</td>
+                                        <td>
+                                            <input type='radio' id='size_yes' name='size' value='1'  > 
+                                            <label for='size_yes' style="cursor: pointer;">Yes</label>
+                                            
+                                            <input type='radio' id='size_no' name='size' value='0' checked> 
+                                            <label for='size_no' style="cursor: pointer;">No</label>
+                                            <br />
+                                        </td>
+                                    </tr>
+
+                                    <tr>
+                                        <td class='ZU'>CEA ≥ 5 ng/mL</td>
+                                        <td>
+                                            <input type='radio' id='cea_yes' name='cea' value='1' > 
+                                            <label for='cea_yes' style="cursor: pointer;">Yes</label>
+                                            
+                                            <input type='radio' id='cea_no' name='cea' value='0' checked > 
+                                            <label for='cea_no' style="cursor: pointer;">No</label>
+                                            </td>
+                                    </tr>
+                                    <tr>
+                                        <td class='ZU'>CA19-9 ≥ 37 U/mL</td>
+                                        <td>
+                                            <input type='radio' id='ca199_yes' name='ca199' value='1' > 
+                                            <label for='ca199_yes' style="cursor: pointer;">Yes</label>
+                                            
+                                            <input type='radio' id='ca199_no' name='ca199' value='0' checked > 
+                                            <label for='ca199_no' style="cursor: pointer;">No</label>
+                                            </td>
+                                    </tr>
+                                    <tr>
+                                        <td class='ZU'> Mural Nodule Present</td>
+                                        <td>
+                                            <input type='radio' id='mnp_yes' name='mnp' value='1' > 
+                                            <label for='mnp_yes' style="cursor: pointer;">Yes</label>
+                                            
+                                            <input type='radio' id='mnp_no' name='mnp' value='0' checked> 
+                                            <label for='mnp_no' style="cursor: pointer;">No</label> 
+                                            <br />
+                                        </td>
+                                    </tr>
+
+                                    <tr height='10'></tr> <tr> <td colspan='2'>
+                                            <a href="#" class="bt_submit" onclick="calc()">CALCULATE</a>  
+                                        </td>
+                                    </tr>
+                                </table>
+                            </fieldset>
+                            </div>
+                            <br />
+                            <div class='res1'>
+                            <fieldset>
+                                <legend> Risk Prediction Result</legend>
+                                Probability of MCN Advanced Neoplasia: <input type='text' id='invaprob' size= readonly />% <span id="comment" style="color:red; font-weight:bold; margin-left:10px;"></span><br />&nbsp;
+                                <div id="invanomo"></div>
+
+                                <p style="font-style: italic; color: #555; margin-bottom: 5px;">
+                                Download the current Nomogram visualization:
+                                </p>
+                                <button onclick="downvis('invanomo', 'png')">PNG</button>
+                                <button onclick="downvis('invanomo', 'svg')">SVG</button>
+                            </fieldset>
+                            </div>
+                            <div id="my"></div>
+                            <div class='ZY'>
+                            </div>
+                        </div>
+                         
+                    </div>
+                    </div>
+
+            </div>
+        </div>
+
+
+    </div>
+</div>
+
+</div>
+
+</body>
+</html>
