@@ -395,8 +395,8 @@
             );
         
         // Add prediction axis
-        var dd = [13.38,  30, 40, 60, 80, 90,95, 98.85];
-        var rr = [0, 90, 120, 186, 260, 332, 390,510];
+        var dd = [3.50,  20,    40,   70,    80,     90,    95,     98, 99, 99.97];
+        var rr = [0,     90,    130,   186,  212,   255,     282,   322,352,  510];
         for (var i=0 ; i<rr.length ; i++) rr[i] += textMax;
         console.log("Total point max " + totalPoint);
         var fScalePred = d3.scale.ordinal()
@@ -503,48 +503,99 @@
 
 
 
-function calc() {
+    function calc() {
+    // 1. 获取输入值
+    var age_val = parseFloat($("#age").val());
+    var size_val = parseFloat($("#size").val());
+    // 注意：JQuery 获取 radio value 返回的是 string，需要转 number
+    var cea_val = parseInt($("input[name=cea]:checked").val());
+    var ca199_val = parseInt($("input[name=ca199]:checked").val());
+    var loc_val = parseInt($("input[name=loc]:checked").val()); // Head=1, BT=0
+    var mnp_val = parseInt($("input[name=mnp]:checked").val());
 
-    var invav = [
-        "input[name=age]:checked",
-        "input[name=size]:checked",
-        "input[name=cea]:checked",
-        "input[name=ca199]:checked",
-        "input[name=mnp]:checked"
-    ];
+    // 简单的输入验证
+    if (isNaN(age_val) || isNaN(size_val)) {
+        alert("Please enter valid numbers for Age and Cyst Size.");
+        return;
+    }
 
+    // 2. 计算 Linear Predictor (LP)
+    // Coefficients based on your provided model:
+    // Intercept: -3.62869
+    // Age: 0.03108
+    // Size: 0.01997
+    // CEA(High): 1.46568
+    // CA199(High): 0.64071
+    // Loc(Head): 0.57169
+    // Mural(Yes): 1.54465
+    
+    var lp = -3.62869 + 
+             (0.03108 * age_val) + 
+             (0.01997 * size_val) + 
+             (1.46568 * cea_val) + 
+             (0.64071 * ca199_val) + 
+             (0.57169 * loc_val) + 
+             (1.54465 * mnp_val);
+
+    // 3. 计算概率 (Sigmoid function)
+    var risk = 1 / (1 + Math.exp(-lp));
+
+    // 4. 显示结果
+    $("#invaprob").val((risk * 100).toFixed(2));
+    $("#comment").text("");
+
+    // 5. 准备 Nomogram 可视化数据 (invax)
+    // 这里的难点是将系数映射到 Nomogram 的 0-100 Point 刻度。
+    // 依据图片：Cyst Size (0-240mm) 大约对应 0-100 Points (最长轴)
+    // Scaling Factor (K) Calculation:
+    // Max contribution of Size = 240 * 0.01997 = 4.7928
+    // If 4.7928 raw logits = 100 Points, then K = 100 / 4.7928 ≈ 20.8646
+    
+    var K = 20.8646;
+
+    // 连续变量格式: [Label, MinVal, MaxVal, MinPoint, MaxPoint]
+    // 分类变量格式: [Label, [Labels], null, {Label: PointValue}]
+    
     var invax = [
-        -1.8679, // Intercept
-        [ "Age ≥ 45 years", ["Yes", "No"], null, {"Yes": 0.9409, "No": 0} ],
-        [ "Cyst size ≥ 65 mm", ["Yes", "No"], null, {"Yes": 1.3450, "No": 0} ],
-        [ "CEA ≥ 5 ng/mL", ["Yes", "No"], null, {"Yes": 1.7688, "No": 0} ],
-        [ "CA19-9 ≥ 37 U/mL", ["Yes", "No"], null, {"Yes": 0.6860, "No": 0} ],
-        [ "Mural Nodule Present", ["Yes", "No"], null, {"Yes": 1.5767, "No": 0} ]
+        -1, // Placeholder for axis 0 (Intercept usually ignored by d3nomogram logic or handled separately)
+        
+        // Age: Range 10-90. 
+        // Points at 10 (Base) = 0. 
+        // Points at 90 = (90-10) * 0.03108 * K = 51.88
+        ["Age (years)", 10, 90, 0, (80 * 0.03108 * K)], 
+
+        // CA19-9
+        ["CA19-9 ≥ 37 u/mL", ["Low", "High"], null, {"Low":0, "High": (0.64071 * K)}],
+
+        // CEA
+        ["CEA ≥ 5 ng/mL", ["Low", "High"], null, {"Low":0, "High": (1.46568 * K)}],
+
+        // Cyst Size: Range 0-240. Points 0 to 100.
+        ["Cyst Size (mm)", 0, 240, 0, (240 * 0.01997 * K)],
+
+        // Location
+        ["Loc", ["BT", "Head"], null, {"BT":0, "Head": (0.57169 * K)}],
+
+        // Mural Nodule
+        ["Mural Nodule", ["N", "Y"], null, {"N":0, "Y": (1.54465 * K)}]
     ];
-     
-    
-    var invaprob = prob(invax, invav, {});
-    
-    if (invaprob !== Number(invaprob)) {
-        $("#invaprob").val(""); // 清空结果
-        $("#comment").text(invaprob); // 显示错误信息
-    } else {
-        $("#invaprob").val(Math.round(invaprob * 10000) / 100);
-        $("#comment").text(""); // 清除错误信息
-    }
 
+    // 6. 准备观测值数组 (obs) 传递给绘图函数
+    // 注意：d3nomogram 对于连续变量需要数值，对于分类变量需要对应的 Label 字符串
+    var obs = [
+        age_val,                                // 对应 invax[1] Age
+        (ca199_val === 1 ? "High" : "Low"),     // 对应 invax[2] CA199
+        (cea_val === 1 ? "High" : "Low"),       // 对应 invax[3] CEA
+        size_val,                               // 对应 invax[4] Size
+        (loc_val === 1 ? "Head" : "BT"),        // 对应 invax[5] Loc
+        (mnp_val === 1 ? "Y" : "N")             // 对应 invax[6] Mural
+    ];
 
-    
-    // 修复：创建 obs 数组时使用 "Yes" / "No" 标签
-    var obs = [];
-    for (var i = 0; i < invav.length; i++) {
-        var val = $(invav[i]).val();
-        var label = (val === "1") ? "Yes" : "No";
-        obs.push(label);
-    }
-
-    d3nomogram("#invanomo", obs, invax, Math.log(invaprob / (1 - invaprob)), 800);
+    // 7. 绘制
+    // 注意：最后一个参数是 Linear Predictor (log odds)，d3nomogram 可能会用它画底部的 Total Point 映射
+    d3nomogram("#invanomo", obs, invax, lp, 800);
 }
+
 
     $(function() {
         // 修复：注释掉这一行，因为它依赖未引入的 jQuery UI 库
@@ -554,7 +605,7 @@ function calc() {
 function downvis(id, fmt) {
     var svgelem = $('#' + id + " > svg");
     if (svgelem.length == 0) {
-        alert("错误：找不到SVG元素。");
+        alert("Error: SVG element not found.");
         return;
     }
 
@@ -571,7 +622,7 @@ function downvis(id, fmt) {
     try {
         styles = $('style[type="text/css"]').text();
     } catch (e) {
-        console.warn("无法提取CSS样式", e);
+        console.warn("Unable to extract CSS styles", e);
     }
     
     // 创建 <style> 元素并注入 <defs>
@@ -712,34 +763,42 @@ legend { font-size:120%; font-weight:bold; }
                                 <legend> Patient Information </legend>
 <table>
                                 <tr height='10'></tr> <tr>
-                                        <td class='ZU'>Age ≥ 45 years</td>
-                                        <td>
-                                            <input type="radio" id="age_yes" name="age" value="1"> 
-                                            <label for="age_yes" style="cursor: pointer;">Yes</label>
-                                            
-                                            <input type="radio" id="age_no" name="age" value="0" checked > 
-                                            <label for="age_no" style="cursor: pointer;">No</label>
+                                        <tr>
+                                            <td class='ZU'>Age (years)</td>
+                                            <td>
+                                                <input type="number" id="age" name="age" placeholder="50" style="width:60px;"> 
+                                                <span style="font-size:0.9em; color:#666;">(Range: 10-90)</span>
                                             </td>
-                                    </tr>
+                                        </tr>
 
-                                    <tr>
-                                        <td class='ZU'>Cyst size ≥ 65 mm</td>
-                                        <td>
-                                            <input type='radio' id='size_yes' name='size' value='1'  > 
-                                            <label for='size_yes' style="cursor: pointer;">Yes</label>
-                                            
-                                            <input type='radio' id='size_no' name='size' value='0' checked> 
-                                            <label for='size_no' style="cursor: pointer;">No</label>
-                                            <br />
-                                        </td>
-                                    </tr>
+                                        <tr>
+                                            <td class='ZU'>Cyst Size (mm)</td>
+                                            <td>
+                                                <input type="number" id="size" name="size" placeholder="50" style="width:60px;">
+                                                <span style="font-size:0.9em; color:#666;">(Range: 0-240)</span>
+                                            </td>
+                                        </tr>
+
+
+
+                                        <tr>
+                                            <td class='ZU'>Location</td>
+                                            <td>
+                                                <input type="radio" id="loc_head" name="loc" value="1"> 
+                                                <label for="loc_head" style="cursor: pointer;">Head</label>
+                                                
+                                                <input type="radio" id="loc_bt" name="loc" value="0" checked> 
+                                                <label for="loc_bt" style="cursor: pointer;">Body/Tail</label>
+                                            </td>
+                                        </tr>
+
 
                                     <tr>
                                         <td class='ZU'>CEA ≥ 5 ng/mL</td>
                                         <td>
                                             <input type='radio' id='cea_yes' name='cea' value='1' > 
                                             <label for='cea_yes' style="cursor: pointer;">Yes</label>
-                                            
+                                    
                                             <input type='radio' id='cea_no' name='cea' value='0' checked > 
                                             <label for='cea_no' style="cursor: pointer;">No</label>
                                             </td>
